@@ -1,10 +1,13 @@
 import React, { useState, useCallback } from 'react';
 import { LoginScreen } from './components/LoginScreen';
+import { ModeSelect } from './components/ModeSelect';
 import { Lobby } from './components/Lobby';
 import { Game } from './components/Game';
 import { GameOver } from './components/GameOver';
+import { SinglePlayer } from './components/SinglePlayer';
+import { getSavedSkin } from './game/stats';
 
-type Screen = 'login' | 'lobby' | 'game' | 'gameover';
+type Screen = 'login' | 'mode' | 'lobby' | 'game' | 'gameover' | 'singleplayer';
 
 const App: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('login');
@@ -16,7 +19,15 @@ const App: React.FC = () => {
 
   const handleLogin = (user: string) => {
     setUsername(user);
-    setScreen('lobby');
+    setScreen('mode');
+  };
+
+  const handleModeSelect = (mode: 'single' | 'multi') => {
+    if (mode === 'single') {
+      setScreen('singleplayer');
+    } else {
+      setScreen('lobby');
+    }
   };
 
   const handleGameStart = useCallback((playerList: string[], skinMap: Record<string, string>) => {
@@ -35,6 +46,10 @@ const App: React.FC = () => {
     setScreen('lobby');
   };
 
+  const handleBackToMode = () => {
+    setScreen('mode');
+  };
+
   const handleExit = () => {
     setScreen('login');
     setUsername('');
@@ -43,8 +58,11 @@ const App: React.FC = () => {
   return (
     <>
       {screen === 'login' && <LoginScreen onLogin={handleLogin} />}
+      {screen === 'mode' && (
+        <ModeSelect username={username} onSelect={handleModeSelect} onLogout={handleExit} />
+      )}
       {screen === 'lobby' && (
-        <Lobby username={username} onGameStart={handleGameStart} onLogout={handleExit} />
+        <Lobby username={username} onGameStart={handleGameStart} onLogout={handleBackToMode} />
       )}
       {screen === 'game' && (
         <Game
@@ -62,7 +80,14 @@ const App: React.FC = () => {
           skins={skins}
           players={players}
           onRematch={handleRematch}
-          onExit={handleExit}
+          onExit={handleBackToMode}
+        />
+      )}
+      {screen === 'singleplayer' && (
+        <SinglePlayer
+          username={username}
+          skinId={getSavedSkin(username) || 'neon-blue'}
+          onExit={handleBackToMode}
         />
       )}
     </>

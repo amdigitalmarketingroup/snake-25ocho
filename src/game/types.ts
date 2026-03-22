@@ -38,5 +38,5 @@ export interface PlayerInfo {
 
 export const USERS: Record<string, string> = {
   mario: 'mario25',
-  lilianny: 'lily25',
+  lilian: 'lily25',
 };

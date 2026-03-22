@@ -97,6 +97,61 @@ export function getHeadToHead(player1: string, player2: string): {
   return { p1Wins, p2Wins, draws, p1TotalPoints: p1Total, p2TotalPoints: p2Total };
 }
 
+// Single player stats
+const SP_KEY = 'snake-25ocho-sp';
+
+export interface SinglePlayerRecord {
+  date: string;
+  username: string;
+  score: number;
+}
+
+function loadSPStats(): Record<string, SinglePlayerRecord[]> {
+  try {
+    const raw = localStorage.getItem(SP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function recordSinglePlayer(username: string, score: number) {
+  const all = loadSPStats();
+  if (!all[username]) all[username] = [];
+  all[username].push({ date: new Date().toISOString(), username, score });
+  // Keep last 100
+  if (all[username].length > 100) all[username].shift();
+  localStorage.setItem(SP_KEY, JSON.stringify(all));
+}
+
+export function getSinglePlayerStats(username: string): {
+  highScore: number;
+  gamesPlayed: number;
+  totalPoints: number;
+  recentScores: number[];
+} {
+  const all = loadSPStats();
+  const records = all[username] || [];
+  const scores = records.map((r) => r.score);
+  return {
+    highScore: scores.length > 0 ? Math.max(...scores) : 0,
+    gamesPlayed: records.length,
+    totalPoints: scores.reduce((a, b) => a + b, 0),
+    recentScores: scores.slice(-10),
+  };
+}
+
+export function getSinglePlayerLeaderboard(): { username: string; highScore: number; gamesPlayed: number }[] {
+  const all = loadSPStats();
+  return Object.entries(all)
+    .map(([username, records]) => ({
+      username,
+      highScore: Math.max(...records.map((r) => r.score), 0),
+      gamesPlayed: records.length,
+    }))
+    .sort((a, b) => b.highScore - a.highScore);
+}
+
 const SKIN_KEY = 'snake-25ocho-skin';
 
 export function getSavedSkin(username: string): string | null {
