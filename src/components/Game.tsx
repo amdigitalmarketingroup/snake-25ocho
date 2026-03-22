@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { GameState, Direction } from '../game/types';
 import { createInitialGameState, tick, isOpposite, CELL_COUNT, TICK_MS } from '../game/engine';
-import { getSkin } from '../game/skins';
+import { getSkin, drawShape } from '../game/skins';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 interface Props {
@@ -204,19 +204,14 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
         const x = pos.x * cellSize;
         const y = pos.y * cellSize;
         const isHead = i === 0;
-        const gap = 1;
-        const radius = isHead ? 4 : 2;
 
         if (isHead && snake.alive) {
           ctx.shadowColor = skin.glow;
           ctx.shadowBlur = 12;
         }
 
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = isHead ? skin.head : skin.body;
-        ctx.beginPath();
-        ctx.roundRect(x + gap, y + gap, cellSize - gap * 2, cellSize - gap * 2, radius);
-        ctx.fill();
+        ctx.globalAlpha = alpha * (1 - i * 0.02);
+        drawShape(ctx, skin.shape, x, y, cellSize, isHead ? skin.head : skin.body);
 
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
@@ -231,20 +226,20 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
           const dir = snake.direction;
           const cx = x + cellSize / 2;
           const cy = y + cellSize / 2;
-          const dx = dir === 'LEFT' ? -1 : dir === 'RIGHT' ? 1 : 0;
-          const dy = dir === 'UP' ? -1 : dir === 'DOWN' ? 1 : 0;
+          const ddx = dir === 'LEFT' ? -1 : dir === 'RIGHT' ? 1 : 0;
+          const ddy = dir === 'UP' ? -1 : dir === 'DOWN' ? 1 : 0;
 
           ctx.beginPath();
           ctx.arc(
-            cx + dx * eyeOffset * 0.5 - (dy !== 0 ? eyeOffset : 0),
-            cy + dy * eyeOffset * 0.5 - (dx !== 0 ? eyeOffset : 0),
+            cx + ddx * eyeOffset * 0.5 - (ddy !== 0 ? eyeOffset : 0),
+            cy + ddy * eyeOffset * 0.5 - (ddx !== 0 ? eyeOffset : 0),
             eyeSize, 0, Math.PI * 2
           );
           ctx.fill();
           ctx.beginPath();
           ctx.arc(
-            cx + dx * eyeOffset * 0.5 + (dy !== 0 ? eyeOffset : 0),
-            cy + dy * eyeOffset * 0.5 + (dx !== 0 ? eyeOffset : 0),
+            cx + ddx * eyeOffset * 0.5 + (ddy !== 0 ? eyeOffset : 0),
+            cy + ddy * eyeOffset * 0.5 + (ddx !== 0 ? eyeOffset : 0),
             eyeSize, 0, Math.PI * 2
           );
           ctx.fill();
@@ -255,18 +250,23 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     });
   }, [canvasSize, skins]);
 
-  // Touch controls
+  // Touch controls — instant detection via touchmove
+  const lastDirRef = useRef<Direction | null>(null);
+
   const handleTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
     const touch = e.touches[0];
     touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    lastDirRef.current = null;
   };
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
+  const handleTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault();
     if (!touchStartRef.current) return;
-    const touch = e.changedTouches[0];
+    const touch = e.touches[0];
     const dx = touch.clientX - touchStartRef.current.x;
     const dy = touch.clientY - touchStartRef.current.y;
-    const minSwipe = 20;
+    const minSwipe = 10;
 
     let direction: Direction | null = null;
 
@@ -280,16 +280,27 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
       }
     }
 
-    if (direction) {
-      directionQueueRef.current.push(direction);
+    if (direction && direction !== lastDirRef.current) {
+      lastDirRef.current = direction;
+      directionQueueRef.current = [direction];
+      // Apply immediately to local state
+      const state = gameStateRef.current;
+      const mySnake = state.snakes[username];
+      if (mySnake && !isOpposite(mySnake.direction, direction)) {
+        state.snakes[username] = { ...mySnake, direction };
+      }
       channelRef.current?.send({
         type: 'broadcast',
         event: 'direction',
         payload: { player: username, direction },
       });
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY };
     }
+  };
 
+  const handleTouchEnd = () => {
     touchStartRef.current = null;
+    lastDirRef.current = null;
   };
 
   const mySkin = getSkin(skins[username] || 'neon-blue');
@@ -300,6 +311,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     <div
       style={styles.container}
       onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
       <style>{`

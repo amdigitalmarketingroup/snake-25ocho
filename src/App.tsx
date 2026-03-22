@@ -44,7 +44,7 @@ const App: React.FC = () => {
     <>
       {screen === 'login' && <LoginScreen onLogin={handleLogin} />}
       {screen === 'lobby' && (
-        <Lobby username={username} onGameStart={handleGameStart} />
+        <Lobby username={username} onGameStart={handleGameStart} onLogout={handleExit} />
       )}
       {screen === 'game' && (
         <Game

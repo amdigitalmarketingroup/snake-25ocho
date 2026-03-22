@@ -1,7 +1,7 @@
 import { Direction, Position, Snake, GameState } from './types';
 
 export const CELL_COUNT = 20;
-export const TICK_MS = 150;
+export const TICK_MS = 90;
 
 export function createInitialSnake(playerIndex: number): Snake {
   const startPositions: Position[] =

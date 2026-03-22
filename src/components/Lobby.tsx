@@ -8,9 +8,10 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 interface Props {
   username: string;
   onGameStart: (players: string[], skins: Record<string, string>) => void;
+  onLogout: () => void;
 }
 
-export const Lobby: React.FC<Props> = ({ username, onGameStart }) => {
+export const Lobby: React.FC<Props> = ({ username, onGameStart, onLogout }) => {
   const [selectedSkin, setSelectedSkin] = useState('neon-blue');
   const [ready, setReady] = useState(false);
   const [players, setPlayers] = useState<Record<string, PlayerInfo>>({});
@@ -94,10 +95,11 @@ export const Lobby: React.FC<Props> = ({ username, onGameStart }) => {
 
       <div style={styles.header}>
         <h2 style={styles.title}>Choose Your Skin</h2>
-        <div style={styles.userBadge}>
+        <button onClick={onLogout} style={styles.userBadge}>
           <div style={{ ...styles.dot, background: '#22c55e' }} />
           {username}
-        </div>
+          <span style={{ color: '#3f3f46', fontSize: 11 }}>Exit</span>
+        </button>
       </div>
 
       <SkinSelector selectedSkin={selectedSkin} onSelect={setSelectedSkin} />
