@@ -1,9 +1,9 @@
 import { Direction, Position, Snake, GameState } from './types';
 
-export const CELL_COUNT = 20;
-export const TICK_MS_START = 180;  // Slow start
-export const TICK_MS_MIN = 65;     // Fastest speed
-export const TICK_MS_STEP = 6;     // ms faster per food eaten
+export const CELL_COUNT = 26;
+export const TICK_MS_START = 220;  // Slow start
+export const TICK_MS_MIN = 70;     // Fastest speed
+export const TICK_MS_STEP = 5;     // ms faster per food eaten
 
 /** Calculate current tick speed based on total foods eaten by both players */
 export function getTickMs(totalScore: number): number {
@@ -11,10 +11,11 @@ export function getTickMs(totalScore: number): number {
 }
 
 export function createInitialSnake(playerIndex: number): Snake {
+  const mid = Math.floor(CELL_COUNT / 2);
   const startPositions: Position[] =
     playerIndex === 0
-      ? [{ x: 3, y: 10 }, { x: 2, y: 10 }, { x: 1, y: 10 }]
-      : [{ x: 16, y: 10 }, { x: 17, y: 10 }, { x: 18, y: 10 }];
+      ? [{ x: 4, y: mid }, { x: 3, y: mid }, { x: 2, y: mid }]
+      : [{ x: CELL_COUNT - 5, y: mid }, { x: CELL_COUNT - 4, y: mid }, { x: CELL_COUNT - 3, y: mid }];
 
   return {
     body: startPositions,

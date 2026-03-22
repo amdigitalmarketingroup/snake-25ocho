@@ -60,6 +60,7 @@ const App: React.FC = () => {
           winner={winner}
           scores={scores}
           skins={skins}
+          players={players}
           onRematch={handleRematch}
           onExit={handleExit}
         />

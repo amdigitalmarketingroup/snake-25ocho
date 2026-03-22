@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { GameState, Direction } from '../game/types';
+import { GameState, Direction, Position } from '../game/types';
 import { createInitialGameState, tick, isOpposite, CELL_COUNT, getTickMs } from '../game/engine';
 import { getSkin, drawShape } from '../game/skins';
 import type { RealtimeChannel } from '@supabase/supabase-js';
@@ -10,6 +10,12 @@ interface Props {
   players: string[];
   skins: Record<string, string>;
   onGameOver: (winner: string | null, scores: Record<string, number>) => void;
+}
+
+// Store previous positions for interpolation
+interface SnakeRenderState {
+  prev: Position[];
+  curr: Position[];
 }
 
 export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) => {
@@ -23,9 +29,12 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
   const isHost = players[0] === username;
   const gameOverSentRef = useRef(false);
 
+  // Interpolation state
+  const renderStateRef = useRef<Record<string, SnakeRenderState>>({});
+  const tickProgressRef = useRef(0);
+
   const [scores, setScores] = useState<Record<string, number>>({});
   const [countdown, setCountdown] = useState(3);
-  const [currentSpeed, setCurrentSpeed] = useState(0);
 
   // Canvas sizing
   const getCanvasSize = useCallback(() => {
@@ -43,10 +52,22 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     return () => window.removeEventListener('resize', handle);
   }, [getCanvasSize]);
 
-  // Calculate total score for speed
   const getTotalScore = useCallback(() => {
     const state = gameStateRef.current;
     return Object.values(state.snakes).reduce((sum, s) => sum + s.score, 0);
+  }, []);
+
+  // Save previous positions before tick for interpolation
+  const savePrevPositions = useCallback(() => {
+    const state = gameStateRef.current;
+    Object.entries(state.snakes).forEach(([id, snake]) => {
+      if (!renderStateRef.current[id]) {
+        renderStateRef.current[id] = { prev: [...snake.body], curr: [...snake.body] };
+      } else {
+        renderStateRef.current[id].prev = renderStateRef.current[id].curr;
+        renderStateRef.current[id].curr = [...snake.body];
+      }
+    });
   }, []);
 
   // Realtime channel
@@ -70,15 +91,25 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
       })
       .on('broadcast', { event: 'state-sync' }, ({ payload }) => {
         if (!isHost) {
+          savePrevPositions();
           gameStateRef.current = payload.state;
+          // Update curr for interpolation
+          Object.entries(payload.state.snakes).forEach(([id, snake]: [string, any]) => {
+            if (!renderStateRef.current[id]) {
+              renderStateRef.current[id] = { prev: [...snake.body], curr: [...snake.body] };
+            } else {
+              renderStateRef.current[id].curr = [...snake.body];
+            }
+          });
           updateScores(payload.state);
+          tickProgressRef.current = 0;
         }
       })
       .subscribe();
 
     channelRef.current = channel;
     return () => { channel.unsubscribe(); };
-  }, [username, isHost]);
+  }, [username, isHost, savePrevPositions]);
 
   const updateScores = (state: GameState) => {
     const s: Record<string, number> = {};
@@ -95,7 +126,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  // Game loop (host-authoritative) with progressive speed
+  // Game loop with interpolation
   useEffect(() => {
     if (countdown > 0) return;
 
@@ -104,9 +135,14 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
 
       const totalScore = getTotalScore();
       const currentTickMs = getTickMs(totalScore);
+      const elapsed = timestamp - lastTickRef.current;
 
-      if (timestamp - lastTickRef.current >= currentTickMs) {
+      // Update interpolation progress
+      tickProgressRef.current = Math.min(1, elapsed / currentTickMs);
+
+      if (elapsed >= currentTickMs) {
         lastTickRef.current = timestamp;
+        tickProgressRef.current = 0;
         const state = gameStateRef.current;
 
         // Apply local direction queue
@@ -119,12 +155,19 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
         }
 
         if (isHost) {
+          savePrevPositions();
           const newState = tick(state);
           gameStateRef.current = newState;
+          // Update curr for interpolation
+          Object.entries(newState.snakes).forEach(([id, snake]) => {
+            if (!renderStateRef.current[id]) {
+              renderStateRef.current[id] = { prev: [...snake.body], curr: [...snake.body] };
+            } else {
+              renderStateRef.current[id].curr = [...snake.body];
+            }
+          });
           updateScores(newState);
-          setCurrentSpeed(totalScore);
 
-          // Broadcast state
           channelRef.current?.send({
             type: 'broadcast',
             event: 'state-sync',
@@ -140,8 +183,6 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
             setTimeout(() => onGameOver(newState.winner, scoreMap), 500);
           }
         } else {
-          setCurrentSpeed(totalScore);
-          // Non-host also checks for game over from synced state
           if (!state.running && !gameOverSentRef.current) {
             gameOverSentRef.current = true;
             const scoreMap: Record<string, number> = {};
@@ -153,16 +194,16 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
         }
       }
 
-      draw();
+      draw(tickProgressRef.current);
       animFrameRef.current = requestAnimationFrame(gameLoop);
     };
 
     animFrameRef.current = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [countdown, isHost, username, onGameOver, getTotalScore]);
+  }, [countdown, isHost, username, onGameOver, getTotalScore, savePrevPositions]);
 
-  // Draw
-  const draw = useCallback(() => {
+  // Draw with interpolation
+  const draw = useCallback((progress: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -175,8 +216,8 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, canvasSize, canvasSize);
 
-    // Grid lines
-    ctx.strokeStyle = '#18181b';
+    // Grid lines (subtle)
+    ctx.strokeStyle = '#151517';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= CELL_COUNT; i++) {
       ctx.beginPath();
@@ -189,18 +230,19 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
       ctx.stroke();
     }
 
-    // Food
+    // Food with pulse animation
     const foodX = state.food.x * cellSize + cellSize / 2;
     const foodY = state.food.y * cellSize + cellSize / 2;
     const foodRadius = cellSize * 0.35;
+    const foodPulse = 1 + Math.sin(Date.now() * 0.004) * 0.1;
 
     ctx.beginPath();
-    ctx.arc(foodX, foodY, foodRadius + 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+    ctx.arc(foodX, foodY, (foodRadius + 4) * foodPulse, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
     ctx.fill();
 
     ctx.beginPath();
-    ctx.arc(foodX, foodY, foodRadius, 0, Math.PI * 2);
+    ctx.arc(foodX, foodY, foodRadius * foodPulse, 0, Math.PI * 2);
     ctx.fillStyle = '#ef4444';
     ctx.fill();
 
@@ -209,23 +251,34 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.fill();
 
-    // Snakes
+    // Snakes with interpolation
     Object.entries(state.snakes).forEach(([id, snake]) => {
       const skin = getSkin(skins[id] || 'neon-blue');
       const alpha = snake.alive ? 1 : 0.3;
+      const rs = renderStateRef.current[id];
 
       snake.body.forEach((pos, i) => {
-        const x = pos.x * cellSize;
-        const y = pos.y * cellSize;
+        let drawX: number, drawY: number;
+
+        // Interpolate position for smoother movement
+        if (rs && rs.prev[i] && rs.curr[i]) {
+          const eased = easeOut(progress);
+          drawX = (rs.prev[i].x + (rs.curr[i].x - rs.prev[i].x) * eased) * cellSize;
+          drawY = (rs.prev[i].y + (rs.curr[i].y - rs.prev[i].y) * eased) * cellSize;
+        } else {
+          drawX = pos.x * cellSize;
+          drawY = pos.y * cellSize;
+        }
+
         const isHead = i === 0;
 
         if (isHead && snake.alive) {
           ctx.shadowColor = skin.glow;
-          ctx.shadowBlur = 12;
+          ctx.shadowBlur = 10;
         }
 
-        ctx.globalAlpha = alpha * (1 - i * 0.02);
-        drawShape(ctx, skin.shape, x, y, cellSize, isHead ? skin.head : skin.body);
+        ctx.globalAlpha = alpha * (1 - i * 0.015);
+        drawShape(ctx, skin.shape, drawX, drawY, cellSize, isHead ? skin.head : skin.body);
 
         ctx.shadowColor = 'transparent';
         ctx.shadowBlur = 0;
@@ -238,8 +291,8 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
           ctx.globalAlpha = 0.9;
 
           const dir = snake.direction;
-          const cx = x + cellSize / 2;
-          const cy = y + cellSize / 2;
+          const cx = drawX + cellSize / 2;
+          const cy = drawY + cellSize / 2;
           const ddx = dir === 'LEFT' ? -1 : dir === 'RIGHT' ? 1 : 0;
           const ddy = dir === 'UP' ? -1 : dir === 'DOWN' ? 1 : 0;
 
@@ -264,7 +317,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     });
   }, [canvasSize, skins]);
 
-  // Touch controls — fast detection via touchmove with low threshold
+  // Touch controls
   const lastDirRef = useRef<Direction | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -280,7 +333,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     const touch = e.touches[0];
     const dx = touch.clientX - touchStartRef.current.x;
     const dy = touch.clientY - touchStartRef.current.y;
-    const minSwipe = 6; // Very responsive threshold
+    const minSwipe = 6;
 
     let direction: Direction | null = null;
 
@@ -297,7 +350,6 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     if (direction && direction !== lastDirRef.current) {
       lastDirRef.current = direction;
       directionQueueRef.current = [direction];
-      // Apply immediately to local state
       const state = gameStateRef.current;
       const mySnake = state.snakes[username];
       if (mySnake && !isOpposite(mySnake.direction, direction)) {
@@ -321,7 +373,6 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
   const opponentName = players.find((p) => p !== username) || '';
   const opponentSkin = getSkin(skins[opponentName] || 'neon-blue');
 
-  // Speed indicator (how many bars are "lit")
   const totalScore = (scores[username] ?? 0) + (scores[opponentName] ?? 0);
   const speedLevel = Math.min(5, Math.floor(totalScore / 4));
 
@@ -379,7 +430,6 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
           style={{ borderRadius: 8, border: '1px solid #27272a' }}
         />
 
-        {/* Countdown overlay */}
         {countdown > 0 && (
           <div style={styles.overlay}>
             <span
@@ -401,6 +451,10 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     </div>
   );
 };
+
+function easeOut(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
