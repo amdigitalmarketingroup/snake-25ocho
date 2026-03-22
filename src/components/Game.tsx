@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { GameState, Direction } from '../game/types';
-import { createInitialGameState, tick, isOpposite, CELL_COUNT, TICK_MS } from '../game/engine';
+import { createInitialGameState, tick, isOpposite, CELL_COUNT, getTickMs } from '../game/engine';
 import { getSkin, drawShape } from '../game/skins';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
@@ -25,12 +25,13 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
 
   const [scores, setScores] = useState<Record<string, number>>({});
   const [countdown, setCountdown] = useState(3);
+  const [currentSpeed, setCurrentSpeed] = useState(0);
 
   // Canvas sizing
   const getCanvasSize = useCallback(() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const maxSize = Math.min(vw - 24, vh - 160);
+    const maxSize = Math.min(vw - 24, vh - 180);
     return Math.floor(maxSize / CELL_COUNT) * CELL_COUNT;
   }, []);
 
@@ -42,9 +43,17 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     return () => window.removeEventListener('resize', handle);
   }, [getCanvasSize]);
 
+  // Calculate total score for speed
+  const getTotalScore = useCallback(() => {
+    const state = gameStateRef.current;
+    return Object.values(state.snakes).reduce((sum, s) => sum + s.score, 0);
+  }, []);
+
   // Realtime channel
   useEffect(() => {
-    const channel = supabase.channel('snake-game');
+    const channel = supabase.channel('snake-game', {
+      config: { broadcast: { self: false, ack: false } },
+    });
 
     channel
       .on('broadcast', { event: 'direction' }, ({ payload }) => {
@@ -86,14 +95,17 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  // Game loop (host-authoritative)
+  // Game loop (host-authoritative) with progressive speed
   useEffect(() => {
     if (countdown > 0) return;
 
     const gameLoop = (timestamp: number) => {
       if (!lastTickRef.current) lastTickRef.current = timestamp;
 
-      if (timestamp - lastTickRef.current >= TICK_MS) {
+      const totalScore = getTotalScore();
+      const currentTickMs = getTickMs(totalScore);
+
+      if (timestamp - lastTickRef.current >= currentTickMs) {
         lastTickRef.current = timestamp;
         const state = gameStateRef.current;
 
@@ -110,6 +122,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
           const newState = tick(state);
           gameStateRef.current = newState;
           updateScores(newState);
+          setCurrentSpeed(totalScore);
 
           // Broadcast state
           channelRef.current?.send({
@@ -127,6 +140,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
             setTimeout(() => onGameOver(newState.winner, scoreMap), 500);
           }
         } else {
+          setCurrentSpeed(totalScore);
           // Non-host also checks for game over from synced state
           if (!state.running && !gameOverSentRef.current) {
             gameOverSentRef.current = true;
@@ -145,7 +159,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
 
     animFrameRef.current = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [countdown, isHost, username, onGameOver]);
+  }, [countdown, isHost, username, onGameOver, getTotalScore]);
 
   // Draw
   const draw = useCallback(() => {
@@ -250,7 +264,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     });
   }, [canvasSize, skins]);
 
-  // Touch controls — instant detection via touchmove
+  // Touch controls — fast detection via touchmove with low threshold
   const lastDirRef = useRef<Direction | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -266,7 +280,7 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
     const touch = e.touches[0];
     const dx = touch.clientX - touchStartRef.current.x;
     const dy = touch.clientY - touchStartRef.current.y;
-    const minSwipe = 10;
+    const minSwipe = 6; // Very responsive threshold
 
     let direction: Direction | null = null;
 
@@ -307,6 +321,10 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
   const opponentName = players.find((p) => p !== username) || '';
   const opponentSkin = getSkin(skins[opponentName] || 'neon-blue');
 
+  // Speed indicator (how many bars are "lit")
+  const totalScore = (scores[username] ?? 0) + (scores[opponentName] ?? 0);
+  const speedLevel = Math.min(5, Math.floor(totalScore / 4));
+
   return (
     <div
       style={styles.container}
@@ -328,6 +346,22 @@ export const Game: React.FC<Props> = ({ username, players, skins, onGameOver }) 
           <div style={{ ...styles.scoreDot, background: mySkin.head, boxShadow: `0 0 8px ${mySkin.glow}` }} />
           <span style={styles.scoreName}>{username}</span>
           <span style={{ ...styles.scoreNum, fontFamily: 'JetBrains Mono, monospace' }}>{scores[username] ?? 0}</span>
+        </div>
+        <div style={styles.speedIndicator}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              style={{
+                width: 3,
+                height: 8 + i * 3,
+                borderRadius: 1,
+                background: i <= speedLevel
+                  ? `hsl(${120 - speedLevel * 24}, 80%, 50%)`
+                  : '#27272a',
+                transition: 'background 0.3s',
+              }}
+            />
+          ))}
         </div>
         <div style={styles.scoreItem}>
           <div style={{ ...styles.scoreDot, background: opponentSkin.head, boxShadow: `0 0 8px ${opponentSkin.glow}` }} />
@@ -376,16 +410,19 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
+    gap: 12,
     padding: '12px',
+    touchAction: 'none',
+    userSelect: 'none',
   },
   scoreboard: {
     display: 'flex',
-    gap: 24,
+    gap: 16,
     padding: '10px 20px',
     background: '#111113',
     borderRadius: 14,
     border: '1px solid #27272a',
+    alignItems: 'center',
   },
   scoreItem: {
     display: 'flex',
@@ -409,6 +446,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#e4e4e7',
     minWidth: 24,
     textAlign: 'right' as const,
+  },
+  speedIndicator: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: 2,
+    padding: '0 8px',
   },
   canvasWrapper: {
     position: 'relative',
